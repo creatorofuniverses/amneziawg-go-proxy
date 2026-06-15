@@ -27,4 +27,5 @@ Platform-specific files use build tags, not just filename suffixes (e.g. `//go:b
 
 - Env vars: `LOG_LEVEL` (verbose/debug|error|silent, default error), `WG_TUN_FD` / `WG_UAPI_FD` (pre-opened fds for daemonization), `WG_TUN_NAME_FILE` (macOS), `WG_PROCESS_FOREGROUND` (internal).
 - Junk/signature packet sizes must stay under the system MTU or packets fragment.
+- Traffic imitation: the UAPI key `imitate_protocol=none|quic|dns|stun|sip` (default `none`) shapes outgoing padding/junk to resemble a real protocol. It is sender-only, length-invariant, and cosmetic (a vanilla peer interops unchanged). The byte-exact port of the `amneziawg-proxy` `transform.rs` fill lives in `device/obf_imitate.go`; `fillPadding` shapes S-padding, `fillJunk` shapes `Jc` junk. Built incrementally in tiers (1 = S-padding, 2 = junk; see `docs/superpowers/plans/`). Byte-exactness is locked by `device/testdata/imitate_vectors.txt` + `TestImitateGoldenVectors` — regenerate vectors via `tools/imitate-vectors/regen.sh` if the fill changes.
 - Interface naming differs per platform: macOS wants `utun[0-9]+` (or `utun` to auto-select), Windows wants numeric names.
