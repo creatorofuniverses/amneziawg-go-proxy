@@ -1,6 +1,9 @@
 package device
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+)
 
 func TestFnv1aSeed(t *testing.T) {
 	// Empty input → bare FNV-1a 32-bit offset basis.
@@ -71,5 +74,61 @@ func TestWriteQUICShortVariesWithPayload(t *testing.T) {
 	}
 	if same {
 		t.Fatal("QUIC padding must vary with payload seed")
+	}
+}
+
+func TestWriteSTUNHeaderOnly(t *testing.T) {
+	// pad_size==20: a bare valid 20-byte Binding Success Response, length 0.
+	buf := make([]byte, 28)
+	for i := 20; i < 28; i++ {
+		buf[i] = 0xAB
+	}
+	imitateFillPrefix(buf, 20, imitateSTUN)
+
+	if binary.BigEndian.Uint16(buf[0:2]) != 0x0101 {
+		t.Errorf("type = %#x, want 0x0101 (Binding Success Response)", buf[0:2])
+	}
+	if binary.BigEndian.Uint16(buf[2:4]) != 0 {
+		t.Errorf("length = %d, want 0 (no attributes fit)", binary.BigEndian.Uint16(buf[2:4]))
+	}
+	if binary.BigEndian.Uint32(buf[4:8]) != 0x2112A442 {
+		t.Errorf("magic cookie = %#x, want 0x2112A442", buf[4:8])
+	}
+	for i := 20; i < 28; i++ {
+		if buf[i] != 0xAB {
+			t.Fatalf("payload byte %d mutated", i)
+		}
+	}
+}
+
+func TestWriteSTUNAttributes(t *testing.T) {
+	// pad=48 → body=(48-20)&^3=28: XOR-MAPPED-ADDRESS(12) + SOFTWARE(4+12).
+	pad := 48
+	buf := make([]byte, pad+16)
+	for i := pad; i < len(buf); i++ {
+		buf[i] = byte(i) | 0x80
+	}
+	imitateFillPrefix(buf, pad, imitateSTUN)
+
+	body := (pad - 20) &^ 0b11
+	if int(binary.BigEndian.Uint16(buf[2:4])) != body {
+		t.Errorf("advertised length = %d, want %d (== body, not overrun)", binary.BigEndian.Uint16(buf[2:4]), body)
+	}
+	if binary.BigEndian.Uint16(buf[20:22]) != 0x0020 {
+		t.Errorf("attr 0 type = %#x, want 0x0020 XOR-MAPPED-ADDRESS", buf[20:22])
+	}
+	if binary.BigEndian.Uint16(buf[22:24]) != 8 {
+		t.Errorf("XMA length = %d, want 8", binary.BigEndian.Uint16(buf[22:24]))
+	}
+	if buf[25] != 0x01 {
+		t.Errorf("XMA family = %#x, want 0x01 IPv4", buf[25])
+	}
+	if binary.BigEndian.Uint16(buf[32:34]) != 0x8022 {
+		t.Errorf("attr 1 type = %#x, want 0x8022 SOFTWARE", buf[32:34])
+	}
+	for i := pad; i < len(buf); i++ {
+		if buf[i] != byte(i)|0x80 {
+			t.Fatalf("payload byte %d mutated", i)
+		}
 	}
 }

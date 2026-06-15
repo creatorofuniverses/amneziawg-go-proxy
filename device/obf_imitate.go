@@ -1,5 +1,7 @@
 package device
 
+import "encoding/binary"
+
 // imitateProto selects the protocol that S-padding (and, in later tiers, junk
 // and I-packets) is shaped to resemble. The zero value imitateNone preserves the
 // original rand.Read behavior.
@@ -88,7 +90,85 @@ func writeQUICShort(buf []byte, padding int, seed uint32) {
 	}
 }
 
-// Temporary stubs — replaced by real implementations in Tasks 3–5.
-func writeDNS(buf []byte, padding int, seed uint32)  {}
-func writeSTUN(buf []byte, padding int, seed uint32) {}
-func writeSIP(buf []byte, padding int, seed uint32)  {}
+// writeSTUN emits a STUN Binding Success Response. Byte-exact port of
+// transform.rs apply_stun_padding. Attributes are written into [20, 20+written)
+// before the header, which lives in [0,20) — no overlap.
+func writeSTUN(buf []byte, padding int, seed uint32) {
+	p := buf[:padding]
+	if len(p) == 0 {
+		return
+	}
+	state := seed
+	next := func() uint32 {
+		v := state
+		state = lcgStep(state)
+		return v
+	}
+	const cookie uint32 = 0x2112A442
+
+	// Transaction ID — 3 LCG steps, consumed before any attribute randomness so
+	// it is stable across pad sizes.
+	var txn [12]byte
+	for i := 0; i < 12; i += 4 {
+		binary.BigEndian.PutUint32(txn[i:i+4], next())
+	}
+
+	body := 0
+	if padding > 20 {
+		body = (padding - 20) &^ 0b11 // STUN message length is a multiple of 4
+	}
+	written := 0
+
+	// XOR-MAPPED-ADDRESS (0x0020), IPv4: 4-byte header + 8-byte value.
+	if body-written >= 12 {
+		port := uint16(next() >> 16)
+		addr := next()
+		xport := port ^ uint16(cookie>>16)
+		xaddr := addr ^ cookie
+		off := 20 + written
+		binary.BigEndian.PutUint16(p[off:off+2], 0x0020)
+		binary.BigEndian.PutUint16(p[off+2:off+4], 8)
+		p[off+4] = 0x00 // reserved
+		p[off+5] = 0x01 // IPv4
+		binary.BigEndian.PutUint16(p[off+6:off+8], xport)
+		binary.BigEndian.PutUint32(p[off+8:off+12], xaddr)
+		written += 12
+	}
+
+	// SOFTWARE (0x8022) fills the rest of body; value clamped to 124 (RFC 5389 §15.10).
+	remaining := body - written
+	if remaining >= 4 {
+		vlen := remaining - 4
+		if vlen > 124 {
+			vlen = 124
+		}
+		off := 20 + written
+		binary.BigEndian.PutUint16(p[off:off+2], 0x8022)
+		binary.BigEndian.PutUint16(p[off+2:off+4], uint16(vlen))
+		for j := 0; j < vlen; j++ {
+			p[off+4+j] = 0x20 + byte(next()%0x5F) // printable ASCII
+		}
+		written += 4 + vlen
+	}
+
+	// Header — advertises `written` (TLV bytes), never `body`.
+	var header [20]byte
+	binary.BigEndian.PutUint16(header[0:2], 0x0101) // Binding Success Response
+	binary.BigEndian.PutUint16(header[2:4], uint16(written))
+	binary.BigEndian.PutUint32(header[4:8], cookie)
+	copy(header[8:20], txn[:])
+	copyLen := len(p)
+	if copyLen > 20 {
+		copyLen = 20
+	}
+	copy(p[:copyLen], header[:copyLen])
+
+	// Zero any padding past the advertised message (undissected trailing bytes).
+	for j := 20 + written; j < len(p); j++ {
+		p[j] = 0x00
+	}
+}
+
+// Temporary stubs — replaced by real implementations in Tasks 4–5.
+func writeDNS(buf []byte, padding int, seed uint32) {}
+func writeSIP(buf []byte, padding int, seed uint32) {}
