@@ -467,7 +467,10 @@ func writeSIP(buf []byte, padding int, seed uint32) {
 
 // fillPadding rewrites buf[:padding] — protocol-conformant filler when an imitate
 // protocol is configured, otherwise the original random padding. Read of proto is
-// lock-free (atomic), never the config lock.
+// lock-free (atomic), never the config lock. Callers must pass a buf whose tail
+// buf[padding:] is exactly the real packet: the DNS/STUN/SIP/QUIC writers seed the
+// PRNG from those bytes, so trailing slack (e.g. a full pooled array) would seed
+// from stale memory.
 func (device *Device) fillPadding(buf []byte, padding int) {
 	if p := imitateProto(device.imitate.proto.Load()); p != imitateNone {
 		imitateFillPrefix(buf, padding, p)

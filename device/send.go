@@ -581,7 +581,7 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 				for i := len(elem.packet) - 1; i >= 0; i-- {
 					elem.buffer[i+padding] = elem.buffer[i]
 				}
-				device.fillPadding(elem.buffer[:], padding)
+				device.fillPadding(elem.buffer[:padding+len(elem.packet)], padding)
 				elem.packet = elem.buffer[:padding+len(elem.packet)]
 			}
 			bufs = append(bufs, elem.packet)
