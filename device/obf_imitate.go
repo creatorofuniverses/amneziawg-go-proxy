@@ -62,8 +62,33 @@ func imitateFill(buf []byte, padding int, seed uint32, p imitateProto) {
 	}
 }
 
-// Temporary stubs — replaced by real implementations in Tasks 2–5.
-func writeQUICShort(buf []byte, padding int, seed uint32) {}
-func writeDNS(buf []byte, padding int, seed uint32)       {}
-func writeSTUN(buf []byte, padding int, seed uint32)      {}
-func writeSIP(buf []byte, padding int, seed uint32)       {}
+// writeQUICShort emits a QUIC 1-RTT short header (RFC 9000 §17.3.1) followed by
+// pseudo-random bytes. Byte-exact port of transform.rs apply_quic_padding_short.
+func writeQUICShort(buf []byte, padding int, seed uint32) {
+	p := buf[:padding]
+	if len(p) == 0 {
+		return
+	}
+	state := seed
+
+	// Short header first byte: 0 1 S R R K P P
+	// form=0, fixed=1, spin=random, reserved=00, key_phase=random, pn_len=random.
+	spin := uint8(state>>8) & 0x01
+	state = lcgStep(state)
+	keyPhase := uint8(state>>8) & 0x01
+	state = lcgStep(state)
+	pnLenBits := uint8(state) & 0x03
+	state = lcgStep(state)
+
+	p[0] = 0x40 | (spin << 5) | (keyPhase << 2) | pnLenBits
+
+	for i := 1; i < len(p); i++ {
+		p[i] = uint8(state >> 16) // middle byte, NOT the low byte
+		state = lcgStep(state)
+	}
+}
+
+// Temporary stubs — replaced by real implementations in Tasks 3–5.
+func writeDNS(buf []byte, padding int, seed uint32)  {}
+func writeSTUN(buf []byte, padding int, seed uint32) {}
+func writeSIP(buf []byte, padding int, seed uint32)  {}

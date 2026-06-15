@@ -31,3 +31,45 @@ func TestLcgStep(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteQUICShort(t *testing.T) {
+	// pad_size=10, payload after it untouched (form=0/fixed=1, reserved cleared).
+	buf := make([]byte, 20)
+	for i := 10; i < 20; i++ {
+		buf[i] = 0xAA
+	}
+	imitateFillPrefix(buf, 10, imitateQUIC)
+
+	if buf[0]&0xC0 != 0x40 {
+		t.Errorf("byte0 form/fixed = %#x, want high bits 0x40", buf[0])
+	}
+	if buf[0]&0x18 != 0x00 {
+		t.Errorf("byte0 reserved bits = %#x, want 0 (RFC 9000 §17.3)", buf[0]&0x18)
+	}
+	for i := 10; i < 20; i++ {
+		if buf[i] != 0xAA {
+			t.Fatalf("payload byte %d mutated to %#x", i, buf[i])
+		}
+	}
+}
+
+func TestWriteQUICShortVariesWithPayload(t *testing.T) {
+	a := make([]byte, 20)
+	b := make([]byte, 20)
+	for i := 10; i < 20; i++ {
+		a[i] = 0xAA
+		b[i] = 0xBB
+	}
+	imitateFillPrefix(a, 10, imitateQUIC)
+	imitateFillPrefix(b, 10, imitateQUIC)
+	same := true
+	for i := 0; i < 10; i++ {
+		if a[i] != b[i] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("QUIC padding must vary with payload seed")
+	}
+}
