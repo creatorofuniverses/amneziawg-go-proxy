@@ -42,6 +42,20 @@ func parseImitateProto(s string) (imitateProto, error) {
 	return imitateNone, fmt.Errorf("unknown imitate protocol %q", s)
 }
 
+func imitateProtoName(p imitateProto) string {
+	switch p {
+	case imitateQUIC:
+		return "quic"
+	case imitateDNS:
+		return "dns"
+	case imitateSTUN:
+		return "stun"
+	case imitateSIP:
+		return "sip"
+	}
+	return "none"
+}
+
 // fnv1aSeed is the FNV-1a 32-bit hash of the first 64 bytes of payload. It seeds
 // the per-packet PRNG for QUIC/STUN/SIP. Byte-exact port of transform.rs fnv1a_seed.
 func fnv1aSeed(payload []byte) uint32 {

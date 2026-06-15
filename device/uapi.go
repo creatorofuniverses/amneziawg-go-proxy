@@ -125,6 +125,10 @@ func (device *Device) IpcGetOperation(w io.Writer) error {
 			sendf("s4=%d", device.paddings.transport)
 		}
 
+		if p := imitateProto(device.imitate.proto.Load()); p != imitateNone {
+			sendf("imitate_protocol=%s", imitateProtoName(p))
+		}
+
 		if device.headers.init != nil {
 			sendf("h1=%s", device.headers.init.GenSpec())
 		}
