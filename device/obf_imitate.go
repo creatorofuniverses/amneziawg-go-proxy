@@ -1,6 +1,7 @@
 package device
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"sync/atomic"
@@ -461,5 +462,16 @@ func writeSIP(buf []byte, padding int, seed uint32) {
 	}
 	for i := pos; i < length; i++ {
 		p[i] = ' '
+	}
+}
+
+// fillPadding rewrites buf[:padding] — protocol-conformant filler when an imitate
+// protocol is configured, otherwise the original random padding. Read of proto is
+// lock-free (atomic), never the config lock.
+func (device *Device) fillPadding(buf []byte, padding int) {
+	if p := imitateProto(device.imitate.proto.Load()); p != imitateNone {
+		imitateFillPrefix(buf, padding, p)
+	} else {
+		rand.Read(buf[:padding])
 	}
 }

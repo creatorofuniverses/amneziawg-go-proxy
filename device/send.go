@@ -160,8 +160,8 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 
 	if padding := peer.device.paddings.init; padding > 0 {
 		buf := make([]byte, padding+len(packet))
-		rand.Read(buf[:padding])
 		copy(buf[padding:], packet)
+		peer.device.fillPadding(buf, padding)
 		packet = buf
 	}
 
@@ -208,8 +208,8 @@ func (peer *Peer) SendHandshakeResponse() error {
 
 	if padding := peer.device.paddings.response; padding > 0 {
 		buf := make([]byte, padding+len(packet))
-		rand.Read(buf[:padding])
 		copy(buf[padding:], packet)
+		peer.device.fillPadding(buf, padding)
 		packet = buf
 	}
 
@@ -245,8 +245,8 @@ func (device *Device) SendHandshakeCookie(initiatingElem *QueueHandshakeElement)
 
 	if padding := device.paddings.cookie; padding > 0 {
 		buf := make([]byte, padding+len(packet))
-		rand.Read(buf[:padding])
 		copy(buf[padding:], packet)
+		device.fillPadding(buf, padding)
 		packet = buf
 	}
 
@@ -581,7 +581,7 @@ func (peer *Peer) RoutineSequentialSender(maxBatchSize int) {
 				for i := len(elem.packet) - 1; i >= 0; i-- {
 					elem.buffer[i+padding] = elem.buffer[i]
 				}
-				rand.Read(elem.buffer[:padding])
+				device.fillPadding(elem.buffer[:], padding)
 				elem.packet = elem.buffer[:padding+len(elem.packet)]
 			}
 			bufs = append(bufs, elem.packet)
