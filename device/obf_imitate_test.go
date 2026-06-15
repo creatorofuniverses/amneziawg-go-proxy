@@ -185,3 +185,50 @@ func TestWriteDNSNullFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteSIPResponse(t *testing.T) {
+	// pad=150 fits a full header block (status line + mandatory headers + CRLFCRLF).
+	pad := 150
+	buf := make([]byte, pad+32)
+	for i := pad; i < len(buf); i++ {
+		buf[i] = 0xCC
+	}
+	imitateFillPrefix(buf, pad, imitateSIP)
+
+	p := buf[:pad]
+	if string(p[:8]) != "SIP/2.0 " {
+		t.Errorf("status line prefix = %q, want %q", p[:8], "SIP/2.0 ")
+	}
+	// Header block ends with a blank line; body after it is space-filled.
+	idx := indexOf(p, []byte("\r\n\r\n"))
+	if idx < 0 {
+		t.Fatal("no header/body separator (\\r\\n\\r\\n) found")
+	}
+	for i := idx + 4; i < pad; i++ {
+		if p[i] != ' ' {
+			t.Fatalf("body byte %d = %#x, want space", i, p[i])
+		}
+	}
+	for i := pad; i < len(buf); i++ {
+		if buf[i] != 0xCC {
+			t.Fatalf("payload byte %d mutated", i)
+		}
+	}
+}
+
+// indexOf is a tiny test helper (avoids importing bytes just for the test).
+func indexOf(hay, needle []byte) int {
+	for i := 0; i+len(needle) <= len(hay); i++ {
+		match := true
+		for j := range needle {
+			if hay[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}

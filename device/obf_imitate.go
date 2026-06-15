@@ -1,6 +1,9 @@
 package device
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // imitateProto selects the protocol that S-padding (and, in later tiers, junk
 // and I-packets) is shaped to resemble. The zero value imitateNone preserves the
@@ -309,5 +312,116 @@ func writeDNSNull(buf []byte, padding int) {
 	}
 }
 
-// Temporary stub — replaced by a real implementation in Task 5.
-func writeSIP(buf []byte, padding int, seed uint32) {}
+func decimalDigits(value int) int {
+	digits := 1
+	for value >= 10 {
+		value /= 10
+		digits++
+	}
+	return digits
+}
+
+// writeSIP emits a SIP response header block. Byte-exact port of
+// transform.rs apply_sip_padding. The LCG draw order (status/host/method/branch/
+// from-tag/to-tag/call-id, then cseq reads state directly) must not change.
+func writeSIP(buf []byte, padding int, seed uint32) {
+	totalLen := len(buf)
+	p := buf[:padding]
+	if len(p) == 0 {
+		return
+	}
+	length := len(p)
+
+	st := seed
+	next := func() uint32 {
+		v := st
+		st = lcgStep(st)
+		return v
+	}
+	status := []string{"100 Trying", "180 Ringing", "200 OK"}
+	hosts := []string{"sip.example.com", "pbx.example.net", "voip.example.org"}
+	methods := []string{"INVITE", "OPTIONS", "REGISTER"}
+	statusIdx := int(next()) % len(status)
+	host := hosts[int(next())%len(hosts)]
+	method := methods[int(next())%len(methods)]
+	branch := next()
+	fromTag := next()
+	toTag := next()
+	callID := next()
+	cseq := 1 + (st % 100000) // reads state directly; no further next()
+
+	pos := 0
+	// putLine writes a CRLF-terminated line iff it + the 2-byte closing blank line
+	// still fit in the padding region.
+	putLine := func(line string) bool {
+		n := len(line)
+		if pos+n+2 <= length {
+			copy(p[pos:pos+n], line)
+			pos += n
+			return true
+		}
+		return false
+	}
+
+	statusWritten := false
+	for k := 0; k < len(status); k++ {
+		s := status[(statusIdx+k)%len(status)]
+		if putLine(fmt.Sprintf("SIP/2.0 %s\r\n", s)) {
+			statusWritten = true
+			break
+		}
+	}
+	if !statusWritten {
+		frag := []byte("SIP/2.0 100 Trying\r\n")
+		take := len(frag)
+		if take > length {
+			take = length
+		}
+		copy(p[:take], frag[:take])
+		for i := take; i < length; i++ {
+			p[i] = ' '
+		}
+		if length >= 2 {
+			p[length-2] = '\r'
+			p[length-1] = '\n'
+		}
+		return
+	}
+
+	allMandatory :=
+		putLine(fmt.Sprintf("Via: SIP/2.0/UDP %s:5060;branch=z9hG4bK%08x;rport\r\n", host, branch)) &&
+			putLine(fmt.Sprintf("From: <sip:caller@%s>;tag=%08x\r\n", host, fromTag)) &&
+			putLine(fmt.Sprintf("To: <sip:callee@%s>;tag=%08x\r\n", host, toTag)) &&
+			putLine(fmt.Sprintf("Call-ID: %08x@%s\r\n", callID, host)) &&
+			putLine(fmt.Sprintf("CSeq: %d %s\r\n", cseq, method))
+
+	if allMandatory {
+	contentLength:
+		for sws := 1; sws <= 2; sws++ {
+			for digits := 1; digits <= decimalDigits(totalLen); digits++ {
+				headerEnd := pos + len("Content-Length:") + sws + digits + len("\r\n\r\n")
+				if headerEnd > length {
+					break
+				}
+				if decimalDigits(totalLen-headerEnd) == digits {
+					body := totalLen - headerEnd
+					if sws == 1 {
+						putLine(fmt.Sprintf("Content-Length: %d\r\n", body))
+					} else {
+						putLine(fmt.Sprintf("Content-Length:  %d\r\n", body))
+					}
+					break contentLength
+				}
+			}
+		}
+	}
+
+	if pos+2 <= length {
+		p[pos] = '\r'
+		p[pos+1] = '\n'
+		pos += 2
+	}
+	for i := pos; i < length; i++ {
+		p[i] = ' '
+	}
+}
