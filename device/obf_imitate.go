@@ -100,6 +100,40 @@ func imitateFillPrefix(buf []byte, padding int, p imitateProto) {
 	imitateFill(buf, padding, seed, p)
 }
 
+// imitateFillWhole writes a complete fake datagram of protocol p into the entire
+// buf, seeded by the caller-supplied seed. Unlike imitateFillPrefix it has no
+// size guard — junk and I-packets WANT padding == len(buf). The seed is injected
+// (not derived from buf, which carries no real payload here), so consecutive
+// packets differ — see imitateJunkSeed. Used by Device.fillJunk (Tier 2) and the
+// imitateObf adapter (Tier 3).
+func imitateFillWhole(buf []byte, seed uint32, p imitateProto) {
+	padding := len(buf)
+	switch p {
+	case imitateQUIC:
+		writeQUICShort(buf, padding, seed)
+	case imitateDNS:
+		writeDNSWhole(buf, seed)
+	case imitateSTUN:
+		writeSTUN(buf, padding, seed)
+	case imitateSIP:
+		writeSIP(buf, padding, seed)
+	}
+}
+
+// writeDNSWhole shapes an entire fake datagram as a DNS message. It diverges from
+// transform.rs (which never shapes junk): there is no payload to source the TXID
+// from, so the TXID is derived from the injected seed. Without this, every DNS
+// junk packet would be byte-identical (TXID 0x0000 + zero-filled OPT) — the A1
+// failure mode. Option-data/NULL rdata stay zero-filled, as the design notes.
+func writeDNSWhole(buf []byte, seed uint32) {
+	padding := len(buf)
+	if padding == 0 {
+		return
+	}
+	txid := [2]byte{byte(seed >> 8), byte(seed)}
+	writeDNSMsg(buf, padding, txid)
+}
+
 // imitateFill dispatches to the protocol writer. `seed` is the initial PRNG state
 // for QUIC/STUN/SIP; the DNS writer derives its TXID from buf[padding:] directly
 // and ignores seed.
@@ -241,9 +275,10 @@ func clampU16(v int) uint16 {
 	return uint16(v)
 }
 
-// writeDNS emits an EDNS OPT-framed DNS response (no-echo path only — a client has
-// no incoming query to echo). The TXID comes from the payload, not the PRNG seed,
-// so `seed` is unused. Byte-exact port of transform.rs apply_dns_padding (echo=None).
+// writeDNS derives the TXID from the payload and emits a DNS response via writeDNSMsg
+// (no-echo path only — a client has no incoming query to echo). The TXID comes from
+// the payload, not the PRNG seed, so `seed` is unused. Byte-exact port of
+// transform.rs apply_dns_padding (echo=None).
 func writeDNS(buf []byte, padding int, seed uint32) {
 	_ = seed
 	if padding == 0 {
