@@ -72,6 +72,16 @@ func fnv1aSeed(payload []byte) uint32 {
 	return state
 }
 
+// imitateJunkSeed turns a monotonic junk counter into a well-spread 32-bit LCG
+// seed by hashing its 8 little-endian bytes with FNV-1a. A raw counter is a poor
+// LCG seed (small values leave the leading output bytes nearly constant); the hash
+// decorrelates consecutive packets so a junk flow is not a sequence of near-clones.
+func imitateJunkSeed(n uint64) uint32 {
+	var b [8]byte
+	binary.LittleEndian.PutUint64(b[:], n)
+	return fnv1aSeed(b[:])
+}
+
 // lcgStep is the glibc linear congruential generator step. uint32 arithmetic
 // wraps natively, which is required for byte-exactness.
 func lcgStep(state uint32) uint32 {
