@@ -384,6 +384,14 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		device.log.Verbosef("UAPI: Updating s4 padding")
 		device.paddings.transport = padding
 
+	case "imitate_protocol":
+		proto, err := parseImitateProto(value)
+		if err != nil {
+			return ipcErrorf(ipc.IpcErrorInvalid, "failed to parse imitate_protocol: %w", err)
+		}
+		device.log.Verbosef("UAPI: Updating imitate protocol")
+		device.imitate.proto.Store(uint32(proto))
+
 	case "h1":
 		header, err := newMagicHeader(value)
 		if err != nil {

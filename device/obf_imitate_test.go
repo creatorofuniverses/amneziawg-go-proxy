@@ -216,6 +216,26 @@ func TestWriteSIPResponse(t *testing.T) {
 	}
 }
 
+func TestParseImitateProto(t *testing.T) {
+	cases := map[string]imitateProto{
+		"":     imitateNone,
+		"none": imitateNone,
+		"quic": imitateQUIC,
+		"dns":  imitateDNS,
+		"stun": imitateSTUN,
+		"sip":  imitateSIP,
+	}
+	for in, want := range cases {
+		got, err := parseImitateProto(in)
+		if err != nil || got != want {
+			t.Errorf("parseImitateProto(%q) = (%d,%v), want (%d,nil)", in, got, err, want)
+		}
+	}
+	if _, err := parseImitateProto("ftp"); err == nil {
+		t.Error("parseImitateProto(\"ftp\") should error")
+	}
+}
+
 // indexOf is a tiny test helper (avoids importing bytes just for the test).
 func indexOf(hay, needle []byte) int {
 	for i := 0; i+len(needle) <= len(hay); i++ {

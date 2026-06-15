@@ -3,6 +3,7 @@ package device
 import (
 	"encoding/binary"
 	"fmt"
+	"sync/atomic"
 )
 
 // imitateProto selects the protocol that S-padding (and, in later tiers, junk
@@ -17,6 +18,29 @@ const (
 	imitateSTUN
 	imitateSIP
 )
+
+// deviceImitate is the device-level imitation config. proto is stored via UAPI
+// under ipcMutex and read lock-free on the send path (atomic.Uint32), matching
+// the existing lock-free paddings/junk reads.
+type deviceImitate struct {
+	proto atomic.Uint32 // imitateProto
+}
+
+func parseImitateProto(s string) (imitateProto, error) {
+	switch s {
+	case "", "none":
+		return imitateNone, nil
+	case "quic":
+		return imitateQUIC, nil
+	case "dns":
+		return imitateDNS, nil
+	case "stun":
+		return imitateSTUN, nil
+	case "sip":
+		return imitateSIP, nil
+	}
+	return imitateNone, fmt.Errorf("unknown imitate protocol %q", s)
+}
 
 // fnv1aSeed is the FNV-1a 32-bit hash of the first 64 bytes of payload. It seeds
 // the per-packet PRNG for QUIC/STUN/SIP. Byte-exact port of transform.rs fnv1a_seed.

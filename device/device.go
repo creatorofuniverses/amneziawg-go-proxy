@@ -111,6 +111,8 @@ type Device struct {
 	}
 
 	ipackets [5]*obfChain
+
+	imitate deviceImitate
 }
 
 // deviceState represents the state of a Device.
