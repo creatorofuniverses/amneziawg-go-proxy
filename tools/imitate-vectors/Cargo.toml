@@ -1,0 +1,12 @@
+[package]
+name = "imitate-vectors"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Generates byte-exact golden vectors for device/testdata/imitate_vectors.txt from the vendored amneziawg-proxy transform.rs reference."
+
+[[bin]]
+name = "imitate-vectors"
+path = "src/main.rs"
+
+[dependencies]
