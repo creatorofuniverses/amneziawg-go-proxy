@@ -24,7 +24,8 @@ const (
 // under ipcMutex and read lock-free on the send path (atomic.Uint32), matching
 // the existing lock-free paddings/junk reads.
 type deviceImitate struct {
-	proto atomic.Uint32 // imitateProto
+	proto       atomic.Uint32 // imitateProto
+	junkCounter atomic.Uint64 // seeds whole-datagram junk fill (mechanism B); .Add(1) per packet
 }
 
 func parseImitateProto(s string) (imitateProto, error) {
@@ -521,5 +522,19 @@ func (device *Device) fillPadding(buf []byte, padding int) {
 		imitateFillPrefix(buf, padding, p)
 	} else {
 		rand.Read(buf[:padding])
+	}
+}
+
+// fillJunk fills an entire junk datagram. When an imitate protocol is configured
+// it shapes the whole buffer as that protocol (mechanism B), seeded by a per-packet
+// device counter so consecutive junk packets are not byte-identical; otherwise it
+// falls back to the original random fill. Read of proto is lock-free (atomic),
+// matching fillPadding and the existing junk/paddings reads.
+func (device *Device) fillJunk(buf []byte) {
+	if p := imitateProto(device.imitate.proto.Load()); p != imitateNone {
+		seed := imitateJunkSeed(device.imitate.junkCounter.Add(1))
+		imitateFillWhole(buf, seed, p)
+	} else {
+		rand.Read(buf)
 	}
 }

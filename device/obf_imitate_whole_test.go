@@ -127,3 +127,48 @@ func TestImitateFillWholeDNSNullForTinyPad(t *testing.T) {
 		t.Errorf("DNS NULL answer TYPE = %#x %#x, want 0x00 0x0a (NULL)", buf[18], buf[19])
 	}
 }
+
+func TestFillJunkShapesWhenProtoSet(t *testing.T) {
+	dev := &Device{}
+	dev.imitate.proto.Store(uint32(imitateQUIC))
+
+	// Each call must advance the counter so successive junk packets differ.
+	a := make([]byte, 600)
+	b := make([]byte, 600)
+	dev.fillJunk(a)
+	dev.fillJunk(b)
+
+	if a[0]&0xC0 != 0x40 {
+		t.Errorf("fillJunk QUIC byte0 = %#x, want high bits 0x40", a[0])
+	}
+	identical := true
+	for i := range a {
+		if a[i] != b[i] {
+			identical = false
+			break
+		}
+	}
+	if identical {
+		t.Fatal("consecutive fillJunk packets are byte-identical (counter not advancing)")
+	}
+}
+
+func TestFillJunkNoneFillsBuffer(t *testing.T) {
+	// proto == none → random fill of the whole buffer (length unchanged, not all-zero).
+	dev := &Device{} // zero value: imitateNone
+	buf := make([]byte, 64)
+	dev.fillJunk(buf)
+	if len(buf) != 64 {
+		t.Fatalf("length changed to %d", len(buf))
+	}
+	allZero := true
+	for _, x := range buf {
+		if x != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		t.Fatal("fillJunk(none) left the buffer all-zero; expected random fill")
+	}
+}
