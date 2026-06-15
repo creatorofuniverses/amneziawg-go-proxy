@@ -132,3 +132,56 @@ func TestWriteSTUNAttributes(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteDNSOptResponse(t *testing.T) {
+	// pad=40 (>= 32): full EDNS OPT framing. total=46, OPT at byte 17.
+	buf := make([]byte, 46)
+	copy(buf[40:], []byte{0xBB, 0xCC, 0x01, 0x02, 0x03, 0x04})
+	imitateFillPrefix(buf, 40, imitateDNS)
+
+	if buf[0] != 0xBB || buf[1] != 0xCC {
+		t.Errorf("TXID = %#x %#x, want from payload bytes 0xBB 0xCC", buf[0], buf[1])
+	}
+	if buf[2] != 0x81 || buf[3] != 0x80 {
+		t.Errorf("flags = %#x %#x, want 0x81 0x80 (QR/RD/RA, NOERROR)", buf[2], buf[3])
+	}
+	if buf[10] != 0x00 || buf[11] != 0x01 {
+		t.Errorf("ARCOUNT = %#x %#x, want 0x00 0x01", buf[10], buf[11])
+	}
+	if buf[18] != 0x00 || buf[19] != 0x29 {
+		t.Errorf("OPT TYPE = %#x %#x, want 0x00 0x29 (41)", buf[18], buf[19])
+	}
+	// RDLENGTH covers to end: total(46) - 28 == 18.
+	if got := binary.BigEndian.Uint16(buf[26:28]); got != 18 {
+		t.Errorf("RDLENGTH = %d, want 18", got)
+	}
+	for i, b := range []byte{0xBB, 0xCC, 0x01, 0x02, 0x03, 0x04} {
+		if buf[40+i] != b {
+			t.Fatalf("payload byte %d mutated", 40+i)
+		}
+	}
+}
+
+func TestWriteDNSNullFallback(t *testing.T) {
+	// pad=30 (< 32): legacy NULL record still covers the whole datagram.
+	buf := make([]byte, 40)
+	for i := 30; i < 40; i++ {
+		buf[i] = 0xAB
+	}
+	imitateFillPrefix(buf, 30, imitateDNS)
+
+	if buf[2] != 0x81 || buf[3] != 0x80 {
+		t.Errorf("flags = %#x %#x, want 0x81 0x80", buf[2], buf[3])
+	}
+	if buf[18] != 0x00 || buf[19] != 0x0a {
+		t.Errorf("answer TYPE = %#x %#x, want NULL (10)", buf[18], buf[19])
+	}
+	if got := binary.BigEndian.Uint16(buf[26:28]); int(got)+28 != 40 {
+		t.Errorf("NULL RDLENGTH=%d; %d+28 != 40", got, got)
+	}
+	for i := 30; i < 40; i++ {
+		if buf[i] != 0xAB {
+			t.Fatalf("payload byte %d mutated", i)
+		}
+	}
+}

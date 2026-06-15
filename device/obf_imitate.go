@@ -169,6 +169,145 @@ func writeSTUN(buf []byte, padding int, seed uint32) {
 	}
 }
 
-// Temporary stubs — replaced by real implementations in Tasks 4–5.
-func writeDNS(buf []byte, padding int, seed uint32) {}
+const (
+	dnsHeaderLen       = 12
+	dnsRootQuestionLen = 5
+	dnsOptFixedLen     = 11
+	dnsOptOptionHdrLen = 4
+	dnsOptMin          = dnsHeaderLen + dnsRootQuestionLen + dnsOptFixedLen + dnsOptOptionHdrLen // 32
+	dnsOptUDPSize      = 1232
+	dnsOptCoverCode    = 0xFDE9
+)
+
+func clampU16(v int) uint16 {
+	if v < 0 {
+		return 0
+	}
+	if v > 0xFFFF {
+		return 0xFFFF
+	}
+	return uint16(v)
+}
+
+// writeDNS emits an EDNS OPT-framed DNS response (no-echo path only — a client has
+// no incoming query to echo). The TXID comes from the payload, not the PRNG seed,
+// so `seed` is unused. Byte-exact port of transform.rs apply_dns_padding (echo=None).
+func writeDNS(buf []byte, padding int, seed uint32) {
+	_ = seed
+	if padding == 0 {
+		return
+	}
+	if padding < dnsOptMin {
+		writeDNSNull(buf, padding)
+		return
+	}
+	total := len(buf)
+	p := buf[:padding]
+	payload := buf[padding:]
+
+	var txid [2]byte
+	if len(payload) > 0 {
+		txid[0] = payload[0]
+	}
+	if len(payload) > 1 {
+		txid[1] = payload[1]
+	}
+	question := []byte{0x00, 0x00, 0x01, 0x00, 0x01} // root QNAME + QTYPE A + QCLASS IN
+	writeDNSOptResponse(p, total, txid, question)
+}
+
+func writeDNSOptResponse(p []byte, total int, txid [2]byte, question []byte) {
+	optOff := dnsHeaderLen + len(question)                                     // 17 for a root question
+	rdlength := clampU16(total - (optOff + dnsOptFixedLen))                    // total - 28
+	optLen := clampU16(total - (optOff + dnsOptFixedLen + dnsOptOptionHdrLen)) // total - 32
+
+	// Header (12 B).
+	p[0] = txid[0]
+	p[1] = txid[1]
+	p[2] = 0x81 // QR=1, RD=1
+	p[3] = 0x80 // RA=1, NOERROR
+	p[4] = 0x00
+	p[5] = 0x01 // QDCOUNT=1
+	p[6] = 0x00
+	p[7] = 0x00 // ANCOUNT=0
+	p[8] = 0x00
+	p[9] = 0x00 // NSCOUNT=0
+	p[10] = 0x00
+	p[11] = 0x01 // ARCOUNT=1
+
+	copy(p[dnsHeaderLen:optOff], question)
+
+	opt := [dnsOptFixedLen + dnsOptOptionHdrLen]byte{
+		0x00,       // NAME: root label
+		0x00, 0x29, // TYPE OPT (41)
+		byte(dnsOptUDPSize >> 8), byte(dnsOptUDPSize & 0xFF), // CLASS = UDP size 1232
+		0x00, 0x00, 0x00, 0x00, // TTL field 0
+		byte(rdlength >> 8), byte(rdlength), // RDLENGTH
+		byte(dnsOptCoverCode >> 8), byte(dnsOptCoverCode & 0xFF), // OPTION-CODE 0xFDE9
+		byte(optLen >> 8), byte(optLen), // OPTION-LENGTH
+	}
+	copy(p[optOff:optOff+len(opt)], opt[:])
+
+	for i := optOff + len(opt); i < len(p); i++ {
+		p[i] = 0x00 // zero-fill option-data prefix
+	}
+}
+
+// writeDNSNull is the legacy TYPE NULL fallback for padding < dnsOptMin.
+// Byte-exact port of transform.rs apply_dns_padding_null.
+func writeDNSNull(buf []byte, padding int) {
+	total := len(buf)
+	p := buf[:padding]
+	payload := buf[padding:]
+	if len(p) == 0 {
+		return
+	}
+	var txHi, txLo byte
+	if len(payload) > 0 {
+		txHi = payload[0]
+	}
+	if len(payload) > 1 {
+		txLo = payload[1]
+	}
+	var qdcount, ancount byte
+	if padding >= 17 {
+		qdcount = 1
+	}
+	if padding >= 28 {
+		ancount = 1
+	}
+	rdlength := clampU16(total - 28) // saturating
+	fixed := [28]byte{
+		txHi, txLo,
+		0x81, 0x80, // QR=1, RD=1, RA=1, NOERROR
+		0x00, qdcount,
+		0x00, ancount,
+		0x00, 0x00,
+		0x00, 0x00,
+		0x00,       // QNAME root label
+		0x00, 0x01, // QTYPE A
+		0x00, 0x01, // QCLASS IN
+		0x00,       // answer NAME root label
+		0x00, 0x0a, // TYPE NULL (10)
+		0x00, 0x01, // CLASS IN
+		0x00, 0x00, 0x00, 0x3c, // TTL 60
+		byte(rdlength >> 8), byte(rdlength),
+	}
+	advertised := 12
+	if padding >= 28 {
+		advertised = 28
+	} else if padding >= 17 {
+		advertised = 17
+	}
+	copyLen := advertised
+	if len(p) < copyLen {
+		copyLen = len(p)
+	}
+	copy(p[:copyLen], fixed[:copyLen])
+	for i := copyLen; i < len(p); i++ {
+		p[i] = 0x00
+	}
+}
+
+// Temporary stub — replaced by a real implementation in Task 5.
 func writeSIP(buf []byte, padding int, seed uint32) {}
