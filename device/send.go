@@ -145,7 +145,7 @@ func (peer *Peer) SendHandshakeInitiation(isRetry bool) error {
 		n := int(nBig.Int64()) + jmin
 
 		buf := make([]byte, n)
-		rand.Read(buf)
+		peer.device.fillJunk(buf)
 		sendBuffer = append(sendBuffer, buf)
 	}
 
