@@ -239,21 +239,28 @@ func writeDNS(buf []byte, padding int, seed uint32) {
 	if padding == 0 {
 		return
 	}
-	if padding < dnsOptMin {
-		writeDNSNull(buf, padding)
-		return
-	}
-	total := len(buf)
-	p := buf[:padding]
-	payload := buf[padding:]
-
 	var txid [2]byte
+	payload := buf[padding:]
 	if len(payload) > 0 {
 		txid[0] = payload[0]
 	}
 	if len(payload) > 1 {
 		txid[1] = payload[1]
 	}
+	writeDNSMsg(buf, padding, txid)
+}
+
+// writeDNSMsg writes a DNS message into buf[:padding] with the given TXID, choosing
+// the full EDNS OPT framing or the legacy NULL fallback by pad size. Shared by the
+// prefix path (writeDNS, TXID from payload) and the whole-datagram junk path
+// (writeDNSWhole, TXID from the injected seed).
+func writeDNSMsg(buf []byte, padding int, txid [2]byte) {
+	if padding < dnsOptMin {
+		writeDNSNull(buf, padding, txid)
+		return
+	}
+	total := len(buf)
+	p := buf[:padding]
 	question := []byte{0x00, 0x00, 0x01, 0x00, 0x01} // root QNAME + QTYPE A + QCLASS IN
 	writeDNSOptResponse(p, total, txid, question)
 }
@@ -296,20 +303,13 @@ func writeDNSOptResponse(p []byte, total int, txid [2]byte, question []byte) {
 }
 
 // writeDNSNull is the legacy TYPE NULL fallback for padding < dnsOptMin.
-// Byte-exact port of transform.rs apply_dns_padding_null.
-func writeDNSNull(buf []byte, padding int) {
+// Byte-exact port of transform.rs apply_dns_padding_null. TXID is supplied by the
+// caller (payload-derived on the prefix path, seed-derived on the junk path).
+func writeDNSNull(buf []byte, padding int, txid [2]byte) {
 	total := len(buf)
 	p := buf[:padding]
-	payload := buf[padding:]
 	if len(p) == 0 {
 		return
-	}
-	var txHi, txLo byte
-	if len(payload) > 0 {
-		txHi = payload[0]
-	}
-	if len(payload) > 1 {
-		txLo = payload[1]
 	}
 	var qdcount, ancount byte
 	if padding >= 17 {
@@ -320,7 +320,7 @@ func writeDNSNull(buf []byte, padding int) {
 	}
 	rdlength := clampU16(total - 28) // saturating
 	fixed := [28]byte{
-		txHi, txLo,
+		txid[0], txid[1],
 		0x81, 0x80, // QR=1, RD=1, RA=1, NOERROR
 		0x00, qdcount,
 		0x00, ancount,
