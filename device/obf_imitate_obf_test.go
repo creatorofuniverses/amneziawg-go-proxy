@@ -50,3 +50,18 @@ func TestImitateObfConsecutiveDiffer(t *testing.T) {
 		t.Error("consecutive I-packets are byte-identical; counter seed not advancing (A1 failure mode)")
 	}
 }
+
+func TestObfChainImitateRegistered(t *testing.T) {
+	for _, tag := range []string{"q", "dns", "stun", "sip"} {
+		spec := "<" + tag + " 600>"
+		chain, err := newObfChain(spec)
+		if err != nil {
+			t.Fatalf("%s: newObfChain(%q): %v", tag, spec, err)
+		}
+		if got := chain.ObfuscatedLen(0); got != 600 {
+			t.Errorf("%s: ObfuscatedLen(0) = %d, want 600", tag, got)
+		}
+		buf := make([]byte, chain.ObfuscatedLen(0))
+		chain.Obfuscate(buf, nil) // must not panic; fills the whole datagram
+	}
+}
