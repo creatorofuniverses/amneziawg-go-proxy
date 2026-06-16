@@ -12,3 +12,6 @@ OUT="$REPO_ROOT/device/testdata/imitate_vectors.txt"
 
 cargo run --quiet --manifest-path "$SCRIPT_DIR/Cargo.toml" -- "$OUT"
 echo "Regenerated $OUT"
+echo "Appending whole-fill vectors (Go oracle)…"
+( cd "$REPO_ROOT" && IMITATE_GEN_WHOLE=1 go test ./device/ -run TestGenWholeVectors -count=1 )
+echo "Appended whole-fill vectors to $OUT"
