@@ -623,3 +623,22 @@ func TestBatchSize(t *testing.T) {
 		t.Errorf("expected batch size %d, got %d", want, got)
 	}
 }
+
+// Run test with -race=false to avoid the race for setting the default msgTypes 2 times
+func TestAWGDevicePingImitateQInit(t *testing.T) {
+	goroutineLeakCheck(t)
+
+	pair := genTestPair(t, true,
+		"h1", "123456-123500",
+		"h2", "67543-67550",
+		"h3", "123123-123200",
+		"h4", "32345-32350",
+		"i1", "<qinit example.com>",
+	)
+	t.Run("ping 1.0.0.1", func(t *testing.T) {
+		pair.Send(t, Ping, nil)
+	})
+	t.Run("ping 1.0.0.2", func(t *testing.T) {
+		pair.Send(t, Pong, nil)
+	})
+}

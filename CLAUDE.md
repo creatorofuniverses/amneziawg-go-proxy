@@ -28,4 +28,12 @@ Platform-specific files use build tags, not just filename suffixes (e.g. `//go:b
 - Env vars: `LOG_LEVEL` (verbose/debug|error|silent, default error), `WG_TUN_FD` / `WG_UAPI_FD` (pre-opened fds for daemonization), `WG_TUN_NAME_FILE` (macOS), `WG_PROCESS_FOREGROUND` (internal).
 - Junk/signature packet sizes must stay under the system MTU or packets fragment.
 - Traffic imitation: the UAPI key `imitate_protocol=none|quic|dns|stun|sip` (default `none`) shapes outgoing padding/junk to resemble a real protocol. It is sender-only, length-invariant, and cosmetic (a vanilla peer interops unchanged). The byte-exact port of the `amneziawg-proxy` `transform.rs` fill lives in `device/obf_imitate.go`; `fillPadding` shapes S-padding, `fillJunk` shapes `Jc` junk. The same four shapes are also exposed as I-packet builders in the AWG obf registry: `i1=<q LEN>` / `<dns LEN>` / `<stun LEN>` / `<sip LEN>` emit a single protocol-shaped fake datagram of `LEN` bytes (mechanism C, via `imitateObf` in `device/obf_imitate_obf.go` over `imitateFillWhole`), seeded by a per-packet counter so a chain is not byte-identical. Built incrementally in tiers (1 = S-padding, 2 = junk, 3 = I-packets; see `docs/superpowers/plans/`). Byte-exactness is locked by `device/testdata/imitate_vectors.txt` + `TestImitateGoldenVectors` — regenerate vectors via `tools/imitate-vectors/regen.sh` if the fill changes.
+  Tier 4 (`Id`) adds `i1=<qinit example.com>`: a single fully-protected 1200-byte
+  QUIC v1 Initial carrying a TLS 1.3 ClientHello with that SNI (RFC 9001 well-known
+  salt, built with Go std crypto — no uTLS), to defeat cheap line-rate SNI filtering.
+  It is cosmetic junk a vanilla peer drops; each datagram uses fresh `crypto/rand`
+  connection IDs. Lives in `device/obf_imitate_quic.go`; correctness is locked by the
+  RFC 9001 Appendix A.1 key vectors plus a self-decrypt round-trip
+  (`device/obf_imitate_quic_test.go`) — there is no `transform.rs` reference for
+  long-header Initials. JA3/JA4 fingerprint matching (`Ib`) is a later tier.
 - Interface naming differs per platform: macOS wants `utun[0-9]+` (or `utun` to auto-select), Windows wants numeric names.
