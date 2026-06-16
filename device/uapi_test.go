@@ -40,6 +40,25 @@ func TestIpcSetImitateIPacket(t *testing.T) {
 	}
 }
 
+func TestIpcSetQInitIPacket(t *testing.T) {
+	dev := randDevice(t)
+	defer dev.Close()
+
+	if err := dev.IpcSet("i1=<qinit example.com>\n"); err != nil {
+		t.Fatalf("set i1=<qinit example.com>: %v", err)
+	}
+	if dev.ipackets[0] == nil {
+		t.Fatal("ipackets[0] not set after i1=<qinit example.com>")
+	}
+	if got := dev.ipackets[0].ObfuscatedLen(0); got != 1200 {
+		t.Errorf("qinit ObfuscatedLen(0) = %d, want 1200", got)
+	}
+
+	if err := dev.IpcSet("i2=<qinit >\n"); err == nil {
+		t.Error("i2=<qinit > (empty SNI) should be rejected")
+	}
+}
+
 func TestUAPIImitateProtocolRoundTrip(t *testing.T) {
 	dev := randDevice(t)
 	defer dev.Close()

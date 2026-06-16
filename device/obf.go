@@ -23,6 +23,9 @@ var obfBuilders = map[string]obfBuilder{
 	"dns":  newImitateObf(imitateDNS),
 	"stun": newImitateObf(imitateSTUN),
 	"sip":  newImitateObf(imitateSIP),
+
+	// Tier 4 (Id): fake QUIC Initial carrying a ClientHello + SNI.
+	"qinit": newQInitObf,
 }
 
 type obf interface {
