@@ -203,6 +203,21 @@ func TestNewQInitObfValidation(t *testing.T) {
 	}
 }
 
+func TestObfChainQInitRegistered(t *testing.T) {
+	chain, err := newObfChain("<qinit example.com>")
+	if err != nil {
+		t.Fatalf("newObfChain: %v", err)
+	}
+	if got := chain.ObfuscatedLen(0); got != 1200 {
+		t.Fatalf("ObfuscatedLen(0) = %d, want 1200", got)
+	}
+	buf := make([]byte, chain.ObfuscatedLen(0))
+	chain.Obfuscate(buf, nil) // must not panic
+	if got := decryptInitialSNI(t, buf); got != "example.com" {
+		t.Errorf("SNI = %q, want example.com", got)
+	}
+}
+
 // decryptInitialSNI parses + unprotects + decrypts a client Initial and returns
 // its SNI. Mirrors buildQUICInitial; reuses deriveInitialKeys/headerProtectionMask/
 // newAESGCM from the implementation.
