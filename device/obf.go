@@ -17,6 +17,12 @@ var obfBuilders = map[string]obfBuilder{
 	"d":  newDataObf,
 	"ds": newDataStringObf,
 	"dz": newDataSizeObf,
+
+	// Tier 3 traffic-imitation I-packets (mechanism C): protocol-shaped junk.
+	"q":    newImitateObf(imitateQUIC),
+	"dns":  newImitateObf(imitateDNS),
+	"stun": newImitateObf(imitateSTUN),
+	"sip":  newImitateObf(imitateSIP),
 }
 
 type obf interface {
