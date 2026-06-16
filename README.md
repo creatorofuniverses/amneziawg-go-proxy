@@ -38,7 +38,10 @@ To run with more logging you may set the environment variable `LOG_LEVEL=debug`.
 
 ### Linux
 
-This will run on Linux; you should run amnezia-wg instead of using default linux kernel module.
+Runs on Linux as a userspace daemon (it does **not** use the kernel module). To use
+the imitation features you must run *this* binary rather than the kernel module — see
+[Running this build](#running-this-build-it-must-be-the-userspace-binary) for how to
+force `awg-quick` onto the userspace path.
 
 ### macOS
 
@@ -197,23 +200,58 @@ padding and validates the header *after* it, never inspecting padding content. S
 imitating peer **interoperates with a stock (vanilla) peer unchanged** — you can turn
 it on for the client alone, against an unmodified server.
 
+### Running this build (it must be the userspace binary)
+
+Every imitation feature lives in **this userspace binary** — the AmneziaWG kernel
+module does not implement them and will reject the new tags (e.g. `I1 = <qinit …>` →
+`Unable to modify interface: Invalid argument`). But `awg-quick` is **kernel-first**:
+with the official kernel module loaded it uses the module and ignores
+`WG_QUICK_USERSPACE_IMPLEMENTATION`. Two ways to actually run this binary:
+
+- **Tools fork (recommended):**
+  [`amneziawg-tools-proxy`](https://github.com/creatorofuniverses/amneziawg-tools-proxy)
+  adds `WG_QUICK_FORCE_USERSPACE`, which skips the kernel module unconditionally:
+  ```
+  WG_QUICK_FORCE_USERSPACE=1 awg-quick up <iface>
+  ```
+  (it selects `WG_QUICK_USERSPACE_IMPLEMENTATION`, default `amneziawg-go`). That fork
+  also exposes the `ImitateProtocol` config key below.
+- **Stock tools (manual):** unload the kernel module so `awg-quick` falls back to
+  userspace (`sudo modprobe -r amneziawg`), or run the `amneziawg-go` daemon directly
+  and configure it with `awg setconf`.
+
 ### `imitate_protocol`
 
 A single device-level key that shapes the obfuscation padding (`S1`–`S4`) and the
-junk packets (`Jc`) to resemble the chosen protocol:
+junk packets (`Jc`) to resemble the chosen protocol (default `none`):
 
 ```
-imitate_protocol = none | quic | dns | stun | sip      # default: none
+imitate_protocol = none | quic | dns | stun | sip      # UAPI key name
 ```
 
-This is a fork-specific key that standard `amneziawg-tools` do not pass through from
-a config file; set it directly on the control socket after the interface is up
-(see the UAPI `set=1` operation), or via tooling that forwards it.
+Set it one of two ways:
+
+- **With the [tools fork](https://github.com/creatorofuniverses/amneziawg-tools-proxy)
+  (recommended):** add the `ImitateProtocol` key to the `[Interface]` section of your
+  config — the patched `awg` forwards it to the daemon:
+  ```
+  [Interface]
+  ...
+  ImitateProtocol = quic
+  ```
+- **With stock tools (manual):** standard `amneziawg-tools` don't know this key and
+  reject it in a config file, so set it on the control socket after the interface is up:
+  ```
+  printf 'set=1\nimitate_protocol=quic\n\n' | socat - UNIX-CONNECT:/var/run/amneziawg/<iface>.sock
+  ```
 
 ### Imitation I-packets
 
 The `<q>` / `<dns>` / `<stun>` / `<sip>` / `<qinit>` tags above plug into the existing
-`I1`–`I5` mechanism, so they need no special tooling — just put them in the config:
+`I1`–`I5` mechanism, so they need **no config-parser change** — the `I1`–`I5` keys are
+already standard, and `awg` forwards their values verbatim. (They still require this
+userspace binary, per [Running this build](#running-this-build-it-must-be-the-userspace-binary)
+above — the kernel module doesn't implement the new tags.) Just put them in the config:
 
 ```
 I1 = <qinit www.google.com>
