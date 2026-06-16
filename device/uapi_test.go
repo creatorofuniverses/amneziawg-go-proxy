@@ -21,6 +21,25 @@ func TestUAPIImitateProtocol(t *testing.T) {
 	}
 }
 
+func TestIpcSetImitateIPacket(t *testing.T) {
+	dev := randDevice(t)
+	defer dev.Close()
+
+	if err := dev.IpcSet("i1=<q 600>\n"); err != nil {
+		t.Fatalf("set i1=<q 600>: %v", err)
+	}
+	if dev.ipackets[0] == nil {
+		t.Fatal("ipackets[0] not set after i1=<q 600>")
+	}
+	if got := dev.ipackets[0].ObfuscatedLen(0); got != 600 {
+		t.Errorf("i1 ObfuscatedLen(0) = %d, want 600", got)
+	}
+
+	if err := dev.IpcSet("i2=<q notanumber>\n"); err == nil {
+		t.Error("i2=<q notanumber> should be rejected (bad length)")
+	}
+}
+
 func TestUAPIImitateProtocolRoundTrip(t *testing.T) {
 	dev := randDevice(t)
 	defer dev.Close()
