@@ -186,6 +186,7 @@ const qinitDatagramLen = 1200 // RFC 9000 §14.1 client-Initial minimum
 // packet number, and the ClientHello randoms come from crypto/rand, so each call
 // differs (real-client behavior; no byte-identical signature). datagramLen is
 // fixed at 1200, which keeps the QUIC "Length" field a 2-byte varint.
+// datagramLen must be >= the 47-byte header+tag overhead (always true for the fixed 1200).
 func buildQUICInitial(sni string, datagramLen int) []byte {
 	const pnLen = 4
 	dcid := make([]byte, 8)
@@ -201,6 +202,8 @@ func buildQUICInitial(sni string, datagramLen int) []byte {
 
 	// header = byte0(1) + version(4) + dcidLen(1)+dcid + scidLen(1)+scid
 	//          + tokenLen(1) + lengthVarint(2) + pn(pnLen)
+	// The "+ 2" assumes a 2-byte QUIC varint for the Length field; at datagramLen
+	// 1200 the field is ~1174, within the 2-byte range (64..16383), so this holds.
 	headerLen := 1 + 4 + 1 + len(dcid) + 1 + len(scid) + 1 + 2 + pnLen
 	payloadLen := datagramLen - headerLen - 16 // 16 = GCM tag; rest is plaintext
 	payload := make([]byte, payloadLen)
@@ -208,7 +211,7 @@ func buildQUICInitial(sni string, datagramLen int) []byte {
 
 	lengthField := pnLen + payloadLen + 16 // covers PN + ciphertext + tag
 
-	hdr := []byte{0xC3} // long header | fixed bit | Initial(00) | pnLen-1 = 3
+	hdr := []byte{0xC3} // long header | fixed bit | Initial(00) | reserved(00) | pnLen-1 = 3
 	hdr = binary.BigEndian.AppendUint32(hdr, 1)
 	hdr = appendU8Vec(hdr, dcid)
 	hdr = appendU8Vec(hdr, scid)
@@ -258,7 +261,9 @@ func newQInitObf(val string) (obf, error) {
 	return &qinitObf{sni: sni, length: qinitDatagramLen}, nil
 }
 
-func (o *qinitObf) Obfuscate(dst, src []byte)        { copy(dst, buildQUICInitial(o.sni, o.length)) }
+func (o *qinitObf) Obfuscate(dst, src []byte) {
+	copy(dst[:o.length], buildQUICInitial(o.sni, o.length))
+}
 func (o *qinitObf) Deobfuscate(dst, src []byte) bool { return true }
 func (o *qinitObf) ObfuscatedLen(n int) int          { return o.length }
 func (o *qinitObf) DeobfuscatedLen(n int) int        { return 0 }

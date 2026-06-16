@@ -156,6 +156,8 @@ func TestQInitRoundTrip(t *testing.T) {
 	pkt := make([]byte, o.ObfuscatedLen(0))
 	o.Obfuscate(pkt, nil)
 
+	// HP masking only XORs bits 3-0 of byte0, so these high-bit checks reflect the
+	// pre-protection 0xC3; the real end-to-end guard is decryptInitialSNI below.
 	if pkt[0]&0xC0 != 0xC0 {
 		t.Errorf("byte0 = %#x, want long-header form (0xC0..)", pkt[0])
 	}

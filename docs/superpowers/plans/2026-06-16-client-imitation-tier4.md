@@ -536,7 +536,8 @@ func buildQUICInitial(sni string, datagramLen int) []byte {
 	rand.Read(pn)
 
 	key, iv, hp := deriveInitialKeys(dcid)
-	crypto := buildCryptoFrame(buildClientHello(sni))
+	// ISCID transport param must equal this SCID (RFC 9000 §7.3) — pass it through.
+	crypto := buildCryptoFrame(buildClientHello(sni, scid))
 
 	// header = byte0(1) + version(4) + dcidLen(1)+dcid + scidLen(1)+scid
 	//          + tokenLen(1) + lengthVarint(2) + pn(pnLen)
