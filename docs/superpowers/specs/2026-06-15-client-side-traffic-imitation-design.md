@@ -301,24 +301,66 @@ These are the byte-level pitfalls behind the golden-fixture requirement (§9 B1)
 - **LCG state is consumed in a fixed order** (STUN: exactly 3 steps for the txn id before attributes; SIP: status/host/method/branch/tags/call-id/cseq in order). Reordering changes every byte.
 - **DNS NULL fallback `rdlength = total_len - 28`** — guard the unsigned subtraction (`if total_len > 28`) or it wraps (Rust uses `saturating_sub`).
 
-### 7.5 Tier 4 — fake QUIC Initial with SNI (`Id`) and fingerprint (`Ib`)
+### 7.5 Tier 4 — fake QUIC Initial with SNI (`Id`)
 
 A **different shape** from Tiers 1–3: not a same-length prefix rewrite but a
 **crafted standalone I-packet** sent before the handshake (`send.go:131-137`), so
-length is free (I-packets are their own datagrams).
+length is free (I-packets are their own datagrams). Tier 4 ships **`Id` only**;
+`Ib` (uTLS JA3/JA4 fingerprinting) is deferred to a later tier (see end of section).
 
-**`Id` (SNI) — the fake Initial:**
-1. Hook the I-packet path with a `qinit` generator: `i1=<qinit example.com>`.
-2. Build QUIC long-header **Initial** → CRYPTO frame → TLS **ClientHello** with
-   `SNI = imitate_sni` → pad to ≥1200 B (RFC 9000 §14.1) → apply Initial header +
-   packet protection using the **RFC 9001 well-known salt** (no secrets — fully
-   reproducible; any DPI can derive the keys and read the benign SNI, which is the
-   point).
+**Scope decisions (brainstorm 2026-06-16):**
+- **`Id` only, no uTLS.** The full RFC 9001 Initial is built with Go **std crypto**
+  (`crypto/aes` + AES-GCM + `crypto/hkdf`, all in Go 1.24) — the fork takes **no new
+  dependency**.
+- **Generic valid TLS 1.3 ClientHello.** A single fixed, well-formed ClientHello
+  (TLS1.3 `supported_versions`, ciphers `0x1301/02/03`, x25519 `key_share`,
+  `signature_algorithms`, ALPN `h3`, `quic_transport_parameters`, + the SNI). It
+  parses cleanly and carries a *static* JA3 — **not** a real browser's. Matching a
+  browser JA3/JA4 is exactly the deferred `Ib` work, not a half-measure here.
+- **`crypto/rand` for the random fields** (DCID, SCID, packet number, ClientHello
+  random, x25519 key_share). Matches real QUIC client behavior, makes consecutive
+  Initials differ for free (no byte-identical signature), and there is no Rust
+  reference to golden-vector against anyway.
+- **`i1=<qinit example.com>`, fixed 1200 B.** `ObfuscatedLen(0) = 1200`; PADDING
+  frames tune the datagram to exactly 1200 (RFC 9000 §14.1 client-Initial minimum),
+  accounting for the 16-byte GCM tag. **No separate device-level `imitate_sni`
+  key** — the self-contained builder supersedes spec §4's `imitate_sni`/`imitate_fingerprint`
+  keys (YAGNI; consistent with the Tier-3 mechanism-C registry pattern).
+
+**`Id` build (mechanism C, new `obf` builder `qinit` in a new file `device/obf_imitate_quic.go`):**
+1. Register `qinit` in `obfBuilders` beside Tier-3 `q`/`dns`/`stun`/`sip`. No
+   `send.go` change — the I-packet path already calls `ObfuscatedLen`+`Obfuscate`.
+2. `Obfuscate(dst,nil)` builds: QUIC long-header **Initial** → CRYPTO frame → TLS
+   **ClientHello** with the configured SNI → PADDING to exactly 1200 B → Initial
+   header + packet protection using the **RFC 9001 v1 well-known salt**
+   (`0x38762cf7f55934b34d179ae6a4c80cadccbb7f0a`, no secrets — fully reproducible;
+   any DPI can derive the keys and read the benign SNI, which is the point).
 3. Defeats cheap line-rate SNI filtering. Does **nothing** against a DPI running a
    full QUIC state machine (the fake handshake never completes — no real
-   ServerHello/key exchange). Documented honestly.
+   ServerHello/key exchange) and a lone Initial with no follow-up is itself a weak
+   flow signal. Documented honestly.
 
-**`Ib` (fingerprint) — uTLS profiles:**
+**Testing — round-trip replaces golden vectors.** `transform.rs` has no long-header
+Initial, so there is no byte-exact reference. The correctness guard is a
+**self-decrypt round-trip**: read the DCID back out of the produced packet, derive
+the same Initial keys, strip header protection, AES-128-GCM-open, parse the CRYPTO
+frame + ClientHello, assert SNI == the configured domain. A wrong header-protection
+mask or AEAD nonce still yields 1200 plausible bytes, so this round-trip is what
+actually catches silent crypto/framing bugs (the Tier-4 analogue of §7.6).
+
+**Tier-4 porter-traps (crypto specifics that pass structural tests but break decrypt):**
+- HKDF chain: `initial_secret = HKDF-Extract(v1_salt, DCID)`; `client_initial =
+  Expand-Label(initial_secret, "client in", "", 32)`; then `quic key`(16)/`quic iv`(12)/`quic hp`(16).
+- `hkdfExpandLabel` uses the **TLS 1.3 `"tls13 "` label prefix** inside the HkdfLabel struct.
+- AEAD nonce = `iv XOR left-padded packet number` (12 bytes).
+- Header protection: AES-128-**ECB** single block over the 16-byte **sample at
+  `pn_offset + 4`**; mask byte0 low **4** bits (long header) + the PN bytes.
+- QUIC **varint** length field (2-byte form at 1200 B); first byte `0xC3`
+  pre-protection (form+fixed+Initial type + 4-byte PN length).
+- Datagram-size accounting: solve PADDING so `header + PN + ciphertext + 16-byte tag
+  == 1200` exactly.
+
+**Deferred — `Ib` (fingerprint), a later tier:**
 - Order ClientHello cipher suites / extensions / ALPN / QUIC transport params to
   match a target browser (JA3/JA4). Reference: `refraction-networking/utls`
   presets rather than hand-rolling (which goes stale each browser release).
