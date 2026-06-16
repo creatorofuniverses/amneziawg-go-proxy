@@ -6,6 +6,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 )
@@ -92,4 +93,69 @@ func appendQUICVarint(b []byte, v uint64) []byte {
 		return append(b, byte(0xc0|(v>>56)), byte(v>>48), byte(v>>40), byte(v>>32),
 			byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
 	}
+}
+
+// --- TLS 1.3 ClientHello (generic, valid; static JA3 — not a browser's; Ib tier) ---
+
+func appendU8Vec(b, body []byte) []byte { return append(append(b, byte(len(body))), body...) }
+func appendU16Vec(b, body []byte) []byte {
+	b = binary.BigEndian.AppendUint16(b, uint16(len(body)))
+	return append(b, body...)
+}
+func tlsExtension(extType uint16, data []byte) []byte {
+	b := binary.BigEndian.AppendUint16(nil, extType)
+	return appendU16Vec(b, data)
+}
+
+// buildClientHello returns a complete TLS 1.3 ClientHello handshake message
+// (type + u24 length + body) advertising the given SNI. Fixed cipher suites,
+// x25519 key share, ALPN h3, and QUIC transport parameters — a clean, parseable
+// ClientHello whose JA3 is static (matching a real browser is the deferred Ib tier).
+func buildClientHello(sni string) []byte {
+	var exts []byte
+
+	// server_name (0x0000): server_name_list{ host_name(0x00) | name }
+	sniList := append([]byte{0x00}, binary.BigEndian.AppendUint16(nil, uint16(len(sni)))...)
+	sniList = append(sniList, sni...)
+	exts = append(exts, tlsExtension(0x0000, appendU16Vec(nil, sniList))...)
+
+	// supported_versions (0x002b): u8 list of [TLS 1.3 = 0x0304]
+	exts = append(exts, tlsExtension(0x002b, appendU8Vec(nil, []byte{0x03, 0x04}))...)
+
+	// supported_groups (0x000a): u16 list of [x25519 = 0x001d]
+	exts = append(exts, tlsExtension(0x000a, appendU16Vec(nil, []byte{0x00, 0x1d}))...)
+
+	// key_share (0x0033): client_shares{ group(x25519) | key_exchange(32 rand) }
+	pub := make([]byte, 32)
+	rand.Read(pub)
+	ks := append([]byte{0x00, 0x1d}, appendU16Vec(nil, pub)...)
+	exts = append(exts, tlsExtension(0x0033, appendU16Vec(nil, ks))...)
+
+	// signature_algorithms (0x000d): ecdsa_p256_sha256, rsa_pss_rsae_sha256, rsa_pkcs1_sha256
+	exts = append(exts, tlsExtension(0x000d, appendU16Vec(nil, []byte{0x04, 0x03, 0x08, 0x04, 0x04, 0x01}))...)
+
+	// application_layer_protocol_negotiation (0x0010): ["h3"]
+	exts = append(exts, tlsExtension(0x0010, appendU16Vec(nil, appendU8Vec(nil, []byte("h3"))))...)
+
+	// quic_transport_parameters (0x0039): initial_source_connection_id (0x0f), empty
+	exts = append(exts, tlsExtension(0x0039, []byte{0x0f, 0x00})...)
+
+	body := []byte{0x03, 0x03} // legacy_version = TLS 1.2
+	random := make([]byte, 32)
+	rand.Read(random)
+	body = append(body, random...)
+	body = appendU8Vec(body, nil)                                         // legacy_session_id: empty
+	body = appendU16Vec(body, []byte{0x13, 0x01, 0x13, 0x02, 0x13, 0x03}) // cipher_suites
+	body = appendU8Vec(body, []byte{0x00})                                // compression: null
+	body = appendU16Vec(body, exts)                                       // extensions
+
+	hs := []byte{0x01, byte(len(body) >> 16), byte(len(body) >> 8), byte(len(body))}
+	return append(hs, body...)
+}
+
+// buildCryptoFrame wraps data in a QUIC CRYPTO frame (type 0x06) at offset 0.
+func buildCryptoFrame(data []byte) []byte {
+	b := appendQUICVarint([]byte{0x06}, 0) // type + offset
+	b = appendQUICVarint(b, uint64(len(data)))
+	return append(b, data...)
 }
