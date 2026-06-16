@@ -12,7 +12,7 @@ import (
 
 // quicV1InitialSalt is the QUIC v1 Initial salt (RFC 9001 §5.2). Public and
 // fixed: any observer can derive these keys and read the benign SNI — which is
-// the entire point of Id (defeating cheap line-rate SNI filtering).
+// the point of the qinit I-packet (Tier 4): defeating cheap line-rate SNI filtering.
 var quicV1InitialSalt = []byte{
 	0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17,
 	0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f, 0x0a,
@@ -21,6 +21,9 @@ var quicV1InitialSalt = []byte{
 // hkdfExpandLabel implements TLS 1.3 HKDF-Expand-Label (RFC 8446 §7.1) with the
 // "tls13 " label prefix and a zero-length context, as QUIC Initial derivation uses.
 func hkdfExpandLabel(secret []byte, label string, length int) []byte {
+	if length > 0xFFFF {
+		panic("hkdfExpandLabel: length exceeds uint16")
+	}
 	fullLabel := "tls13 " + label
 	info := make([]byte, 0, 2+1+len(fullLabel)+1)
 	info = binary.BigEndian.AppendUint16(info, uint16(length))
@@ -64,6 +67,9 @@ func newAESGCM(key []byte) cipher.AEAD {
 // headerProtectionMask returns the 5-byte-relevant AES-ECB header-protection
 // mask (RFC 9001 §5.4.3): a single AES block over the 16-byte ciphertext sample.
 func headerProtectionMask(hp, sample []byte) []byte {
+	if len(sample) != aes.BlockSize {
+		panic("headerProtectionMask: sample must be exactly 16 bytes")
+	}
 	block, err := aes.NewCipher(hp)
 	if err != nil {
 		panic(err)

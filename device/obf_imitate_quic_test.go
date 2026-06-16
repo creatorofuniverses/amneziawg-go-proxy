@@ -46,6 +46,7 @@ func TestAppendQUICVarint(t *testing.T) {
 		{63, "3f"},
 		{1174, "4496"}, // 2-byte form: 0x4000 | 1174
 		{494878333, "9d7f3e7d"},
+		{1073741824, "c000000040000000"},
 	}
 	for _, c := range cases {
 		got := appendQUICVarint(nil, c.v)
