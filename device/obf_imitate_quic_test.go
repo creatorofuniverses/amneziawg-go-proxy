@@ -144,3 +144,103 @@ func clientHelloSNI(t *testing.T, ch []byte) string {
 	t.Fatal("no SNI extension in ClientHello")
 	return ""
 }
+
+func TestQInitRoundTrip(t *testing.T) {
+	o, err := newQInitObf("example.com")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if got := o.ObfuscatedLen(0); got != 1200 {
+		t.Fatalf("ObfuscatedLen(0) = %d, want 1200", got)
+	}
+	pkt := make([]byte, o.ObfuscatedLen(0))
+	o.Obfuscate(pkt, nil)
+
+	if pkt[0]&0xC0 != 0xC0 {
+		t.Errorf("byte0 = %#x, want long-header form (0xC0..)", pkt[0])
+	}
+	if pkt[0]&0x30 != 0x00 {
+		t.Errorf("byte0 = %#x, want Initial packet type (bits 4-5 = 0)", pkt[0])
+	}
+	if v := binary.BigEndian.Uint32(pkt[1:]); v != 1 {
+		t.Errorf("version = %#x, want QUIC v1", v)
+	}
+
+	if got := decryptInitialSNI(t, pkt); got != "example.com" {
+		t.Errorf("round-tripped SNI = %q, want example.com", got)
+	}
+}
+
+func TestQInitConsecutiveDiffer(t *testing.T) {
+	o, _ := newQInitObf("example.com")
+	a := make([]byte, 1200)
+	b := make([]byte, 1200)
+	o.Obfuscate(a, nil)
+	o.Obfuscate(b, nil)
+	if bytes.Equal(a, b) {
+		t.Error("consecutive Initials are byte-identical; crypto/rand fields not varying")
+	}
+}
+
+func TestNewQInitObfValidation(t *testing.T) {
+	if _, err := newQInitObf(""); err == nil {
+		t.Error("empty server name must be rejected")
+	}
+	if _, err := newQInitObf(string(make([]byte, 256))); err == nil {
+		t.Error("over-long server name must be rejected")
+	}
+	o, err := newQInitObf("example.com")
+	if err != nil {
+		t.Fatalf("valid build: %v", err)
+	}
+	if o.DeobfuscatedLen(1200) != 0 {
+		t.Error("DeobfuscatedLen should be 0 (cosmetic, carries no real payload)")
+	}
+	if !o.Deobfuscate(nil, nil) {
+		t.Error("Deobfuscate should always accept (cosmetic, like randObf)")
+	}
+}
+
+// decryptInitialSNI parses + unprotects + decrypts a client Initial and returns
+// its SNI. Mirrors buildQUICInitial; reuses deriveInitialKeys/headerProtectionMask/
+// newAESGCM from the implementation.
+func decryptInitialSNI(t *testing.T, pkt []byte) string {
+	t.Helper()
+	off := 5 // skip byte0 + version(4)
+	dcidLen := int(pkt[off])
+	off++
+	dcid := pkt[off : off+dcidLen]
+	off += dcidLen
+	scidLen := int(pkt[off])
+	off += 1 + scidLen
+	tokenLen, n := readQUICVarint(pkt[off:])
+	off += n + int(tokenLen)
+	_, n = readQUICVarint(pkt[off:]) // length field
+	off += n
+	pnOffset := off
+
+	key, iv, hp := deriveInitialKeys(dcid)
+	mask := headerProtectionMask(hp, pkt[pnOffset+4:pnOffset+4+16])
+
+	first := pkt[0] ^ (mask[0] & 0x0f)
+	pnLen := int(first&0x03) + 1
+	hdr := make([]byte, pnOffset+pnLen)
+	copy(hdr, pkt[:pnOffset+pnLen])
+	hdr[0] = first
+	pnFull := make([]byte, 4)
+	for i := 0; i < pnLen; i++ {
+		hdr[pnOffset+i] = pkt[pnOffset+i] ^ mask[1+i]
+		pnFull[4-pnLen+i] = hdr[pnOffset+i]
+	}
+
+	nonce := make([]byte, 12)
+	copy(nonce, iv)
+	for i := 0; i < 4; i++ {
+		nonce[8+i] ^= pnFull[i]
+	}
+	plaintext, err := newAESGCM(key).Open(nil, nonce, pkt[pnOffset+pnLen:], hdr)
+	if err != nil {
+		t.Fatalf("GCM open failed (crypto/framing bug): %v", err)
+	}
+	return clientHelloSNI(t, cryptoFrameData(t, plaintext))
+}

@@ -9,6 +9,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
+	"strings"
 )
 
 // quicV1InitialSalt is the QUIC v1 Initial salt (RFC 9001 §5.2). Public and
@@ -174,3 +176,89 @@ func buildCryptoFrame(data []byte) []byte {
 	b = appendQUICVarint(b, uint64(len(data)))
 	return append(b, data...)
 }
+
+// --- Full Initial datagram + obf adapter (mechanism C: I-packets) ---
+
+const qinitDatagramLen = 1200 // RFC 9000 §14.1 client-Initial minimum
+
+// buildQUICInitial returns a complete, header-protected QUIC v1 Initial datagram
+// of exactly datagramLen bytes carrying a ClientHello with sni. Connection IDs,
+// packet number, and the ClientHello randoms come from crypto/rand, so each call
+// differs (real-client behavior; no byte-identical signature). datagramLen is
+// fixed at 1200, which keeps the QUIC "Length" field a 2-byte varint.
+func buildQUICInitial(sni string, datagramLen int) []byte {
+	const pnLen = 4
+	dcid := make([]byte, 8)
+	scid := make([]byte, 8)
+	pn := make([]byte, pnLen)
+	rand.Read(dcid)
+	rand.Read(scid)
+	rand.Read(pn)
+
+	key, iv, hp := deriveInitialKeys(dcid)
+	// ISCID transport param must equal this SCID (RFC 9000 §7.3) — pass it through.
+	crypto := buildCryptoFrame(buildClientHello(sni, scid))
+
+	// header = byte0(1) + version(4) + dcidLen(1)+dcid + scidLen(1)+scid
+	//          + tokenLen(1) + lengthVarint(2) + pn(pnLen)
+	headerLen := 1 + 4 + 1 + len(dcid) + 1 + len(scid) + 1 + 2 + pnLen
+	payloadLen := datagramLen - headerLen - 16 // 16 = GCM tag; rest is plaintext
+	payload := make([]byte, payloadLen)
+	copy(payload, crypto) // trailing zeros are PADDING frames (0x00)
+
+	lengthField := pnLen + payloadLen + 16 // covers PN + ciphertext + tag
+
+	hdr := []byte{0xC3} // long header | fixed bit | Initial(00) | pnLen-1 = 3
+	hdr = binary.BigEndian.AppendUint32(hdr, 1)
+	hdr = appendU8Vec(hdr, dcid)
+	hdr = appendU8Vec(hdr, scid)
+	hdr = append(hdr, 0x00) // token length 0
+	hdr = appendQUICVarint(hdr, uint64(lengthField))
+	pnOffset := len(hdr)
+	hdr = append(hdr, pn...)
+
+	nonce := make([]byte, 12)
+	copy(nonce, iv)
+	for i := 0; i < pnLen; i++ {
+		nonce[12-pnLen+i] ^= pn[i]
+	}
+	sealed := newAESGCM(key).Seal(nil, nonce, payload, hdr)
+
+	pkt := make([]byte, 0, datagramLen)
+	pkt = append(pkt, hdr...)
+	pkt = append(pkt, sealed...)
+
+	// Header protection (RFC 9001 §5.4): sample 16 bytes at pnOffset+4.
+	mask := headerProtectionMask(hp, pkt[pnOffset+4:pnOffset+4+16])
+	pkt[0] ^= mask[0] & 0x0f // long header: low 4 bits
+	for i := 0; i < pnLen; i++ {
+		pkt[pnOffset+i] ^= mask[1+i]
+	}
+	return pkt
+}
+
+// qinitObf is the obf-registry adapter for Id (mechanism C): each I-packet is a
+// fresh, fully-protected QUIC Initial advertising sni. Cosmetic on the wire like
+// randObf — a vanilla peer drops it as undecryptable junk.
+type qinitObf struct {
+	sni    string
+	length int
+}
+
+// newQInitObf parses the qinit tag value (the SNI) and binds a 1200-byte Initial
+// builder. Registered as i1=<qinit example.com>.
+func newQInitObf(val string) (obf, error) {
+	sni := strings.TrimSpace(val)
+	if sni == "" {
+		return nil, errors.New("qinit requires a server name, e.g. i1=<qinit example.com>")
+	}
+	if len(sni) > 255 {
+		return nil, errors.New("qinit server name too long (max 255)")
+	}
+	return &qinitObf{sni: sni, length: qinitDatagramLen}, nil
+}
+
+func (o *qinitObf) Obfuscate(dst, src []byte)        { copy(dst, buildQUICInitial(o.sni, o.length)) }
+func (o *qinitObf) Deobfuscate(dst, src []byte) bool { return true }
+func (o *qinitObf) ObfuscatedLen(n int) int          { return o.length }
+func (o *qinitObf) DeobfuscatedLen(n int) int        { return 0 }
