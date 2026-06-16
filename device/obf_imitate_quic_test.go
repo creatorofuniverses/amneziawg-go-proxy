@@ -58,7 +58,8 @@ func TestAppendQUICVarint(t *testing.T) {
 }
 
 func TestBuildClientHelloSNI(t *testing.T) {
-	ch := buildClientHello("example.com")
+	scid := []byte{1, 2, 3, 4, 5, 6, 7, 8}
+	ch := buildClientHello("example.com", scid)
 	if ch[0] != 0x01 {
 		t.Fatalf("handshake type = %#x, want ClientHello 0x01", ch[0])
 	}
@@ -68,6 +69,11 @@ func TestBuildClientHelloSNI(t *testing.T) {
 	}
 	if got := clientHelloSNI(t, ch); got != "example.com" {
 		t.Errorf("recovered SNI = %q, want example.com", got)
+	}
+	// initial_source_connection_id transport param must carry the SCID (RFC 9000 §7.3).
+	wantISCID := append([]byte{0x0f, byte(len(scid))}, scid...)
+	if !bytes.Contains(ch, wantISCID) {
+		t.Error("ClientHello quic_transport_parameters missing initial_source_connection_id = SCID")
 	}
 }
 
@@ -93,6 +99,9 @@ func readQUICVarint(b []byte) (uint64, int) {
 
 func cryptoFrameData(t *testing.T, frame []byte) []byte {
 	t.Helper()
+	if len(frame) < 2 {
+		t.Fatalf("cryptoFrameData: frame too short (%d bytes)", len(frame))
+	}
 	if frame[0] != 0x06 {
 		t.Fatalf("not a CRYPTO frame: %#x", frame[0])
 	}
@@ -106,6 +115,9 @@ func cryptoFrameData(t *testing.T, frame []byte) []byte {
 
 func clientHelloSNI(t *testing.T, ch []byte) string {
 	t.Helper()
+	if len(ch) < 4 {
+		t.Fatalf("clientHelloSNI: buffer too short (%d bytes)", len(ch))
+	}
 	if ch[0] != 0x01 {
 		t.Fatalf("handshake type = %#x, want ClientHello 0x01", ch[0])
 	}

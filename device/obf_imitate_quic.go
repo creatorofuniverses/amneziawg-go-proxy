@@ -97,8 +97,17 @@ func appendQUICVarint(b []byte, v uint64) []byte {
 
 // --- TLS 1.3 ClientHello (generic, valid; static JA3 — not a browser's; Ib tier) ---
 
-func appendU8Vec(b, body []byte) []byte { return append(append(b, byte(len(body))), body...) }
+func appendU8Vec(b, body []byte) []byte {
+	if len(body) > 0xFF {
+		panic("appendU8Vec: body exceeds 255 bytes")
+	}
+	return append(append(b, byte(len(body))), body...)
+}
+
 func appendU16Vec(b, body []byte) []byte {
+	if len(body) > 0xFFFF {
+		panic("appendU16Vec: body exceeds 65535 bytes")
+	}
 	b = binary.BigEndian.AppendUint16(b, uint16(len(body)))
 	return append(b, body...)
 }
@@ -111,7 +120,9 @@ func tlsExtension(extType uint16, data []byte) []byte {
 // (type + u24 length + body) advertising the given SNI. Fixed cipher suites,
 // x25519 key share, ALPN h3, and QUIC transport parameters — a clean, parseable
 // ClientHello whose JA3 is static (matching a real browser is the deferred Ib tier).
-func buildClientHello(sni string) []byte {
+// scid is the Source Connection ID from the enclosing QUIC Initial header; it is
+// echoed into initial_source_connection_id per RFC 9000 §7.3.
+func buildClientHello(sni string, scid []byte) []byte {
 	var exts []byte
 
 	// server_name (0x0000): server_name_list{ host_name(0x00) | name }
@@ -137,8 +148,12 @@ func buildClientHello(sni string) []byte {
 	// application_layer_protocol_negotiation (0x0010): ["h3"]
 	exts = append(exts, tlsExtension(0x0010, appendU16Vec(nil, appendU8Vec(nil, []byte("h3"))))...)
 
-	// quic_transport_parameters (0x0039): initial_source_connection_id (0x0f), empty
-	exts = append(exts, tlsExtension(0x0039, []byte{0x0f, 0x00})...)
+	// quic_transport_parameters (0x0039): initial_source_connection_id (0x0f) = SCID.
+	// RFC 9000 §7.3 requires this to equal the Initial header's Source Connection ID;
+	// the connection-ID lengths used here are <64, so the QUIC varint ids/lengths are
+	// single bytes.
+	qtp := append([]byte{0x0f, byte(len(scid))}, scid...)
+	exts = append(exts, tlsExtension(0x0039, qtp)...)
 
 	body := []byte{0x03, 0x03} // legacy_version = TLS 1.2
 	random := make([]byte, 32)
