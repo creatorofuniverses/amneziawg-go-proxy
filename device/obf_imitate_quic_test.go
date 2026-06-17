@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"os"
 	"testing"
 )
 
@@ -215,6 +216,48 @@ func TestObfChainQInitRegistered(t *testing.T) {
 	chain.Obfuscate(buf, nil) // must not panic
 	if got := decryptInitialSNI(t, buf); got != "example.com" {
 		t.Errorf("SNI = %q, want example.com", got)
+	}
+}
+
+// qinitPinnedStream is the fixed 84-byte randomness used to make qinit
+// deterministic for the cross-impl golden vector. Draw order:
+// dcid(8), scid(8), pn(4), key_share pub(32), client_hello random(32).
+func qinitPinnedStream() []byte {
+	s := make([]byte, 84)
+	for i := 0; i < 8; i++ {
+		s[i] = byte(i)           // dcid 00..07
+		s[8+i] = byte(0x10 + i) // scid 10..17
+	}
+	s[16], s[17], s[18], s[19] = 0x20, 0x21, 0x22, 0x23 // pn
+	for i := 0; i < 32; i++ {
+		s[20+i] = byte(0x30 + i) // key_share 30..4f
+		s[52+i] = byte(0x50 + i) // ch random 50..6f
+	}
+	return s
+}
+
+// Regenerate the committed golden vector with WRITE_QINIT_VECTOR=1:
+//
+//	WRITE_QINIT_VECTOR=<path> go test ./device/ -run TestQInitGoldenVector
+func TestQInitGoldenVector(t *testing.T) {
+	got := buildQUICInitialWithRand(bytes.NewReader(qinitPinnedStream()), "example.com", 1200)
+	if len(got) != 1200 {
+		t.Fatalf("len = %d, want 1200", len(got))
+	}
+	if p := os.Getenv("WRITE_QINIT_VECTOR"); p != "" {
+		if err := os.WriteFile(p, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("wrote %d bytes to %s", len(got), p)
+		return
+	}
+	// Drift guard: compare against the committed vector in the kernel repo.
+	want, err := os.ReadFile("../../amneziawg-proxy-linux-kernel-module/tests/imitate/testdata/qinit_vector.bin")
+	if err != nil {
+		t.Skipf("golden vector not found (run with WRITE_QINIT_VECTOR): %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("datagram drifted from committed golden vector")
 	}
 }
 
