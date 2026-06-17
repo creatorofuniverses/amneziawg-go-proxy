@@ -40,6 +40,31 @@ func TestImitateGoldenVectors(t *testing.T) {
 			continue
 		}
 		fields := strings.Fields(line)
+		if len(fields) == 5 && fields[1] == "whole" {
+			proto, ok := protoFromName(fields[0])
+			if !ok {
+				t.Fatalf("unknown proto %q", fields[0])
+			}
+			length, err := strconv.Atoi(fields[2])
+			if err != nil {
+				t.Fatalf("bad len %q: %v", fields[2], err)
+			}
+			seed64, err := strconv.ParseUint(fields[3], 16, 32)
+			if err != nil {
+				t.Fatalf("bad seed hex %q: %v", fields[3], err)
+			}
+			want, err := hex.DecodeString(fields[4])
+			if err != nil {
+				t.Fatalf("bad output hex: %v", err)
+			}
+			buf := make([]byte, length)
+			imitateFillWhole(buf, uint32(seed64), proto)
+			if hex.EncodeToString(buf) != hex.EncodeToString(want) {
+				t.Errorf("%s whole len=%d: byte mismatch\n got %x\nwant %x", fields[0], length, buf, want)
+			}
+			n++
+			continue
+		}
 		if len(fields) != 4 {
 			t.Fatalf("malformed fixture line: %q", line)
 		}

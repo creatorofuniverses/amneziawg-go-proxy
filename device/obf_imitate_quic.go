@@ -6,10 +6,11 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
-	"crypto/rand"
+	rand "crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"io"
 	"strings"
 )
 
@@ -118,13 +119,14 @@ func tlsExtension(extType uint16, data []byte) []byte {
 	return appendU16Vec(b, data)
 }
 
-// buildClientHello returns a complete TLS 1.3 ClientHello handshake message
+// buildClientHelloWithRand returns a complete TLS 1.3 ClientHello handshake message
 // (type + u24 length + body) advertising the given SNI. Fixed cipher suites,
 // x25519 key share, ALPN h3, and QUIC transport parameters — a clean, parseable
 // ClientHello whose JA3 is static (matching a real browser is the deferred Ib tier).
 // scid is the Source Connection ID from the enclosing QUIC Initial header; it is
 // echoed into initial_source_connection_id per RFC 9000 §7.3.
-func buildClientHello(sni string, scid []byte) []byte {
+// Random bytes are drawn from r in order: key_share pub(32), ClientHello random(32).
+func buildClientHelloWithRand(r io.Reader, sni string, scid []byte) []byte {
 	var exts []byte
 
 	// server_name (0x0000): server_name_list{ host_name(0x00) | name }
@@ -140,7 +142,9 @@ func buildClientHello(sni string, scid []byte) []byte {
 
 	// key_share (0x0033): client_shares{ group(x25519) | key_exchange(32 rand) }
 	pub := make([]byte, 32)
-	rand.Read(pub)
+	if _, err := io.ReadFull(r, pub); err != nil {
+		panic(err) // fixed-size draw; only fails on exhausted/broken reader
+	}
 	ks := append([]byte{0x00, 0x1d}, appendU16Vec(nil, pub)...)
 	exts = append(exts, tlsExtension(0x0033, appendU16Vec(nil, ks))...)
 
@@ -159,7 +163,9 @@ func buildClientHello(sni string, scid []byte) []byte {
 
 	body := []byte{0x03, 0x03} // legacy_version = TLS 1.2
 	random := make([]byte, 32)
-	rand.Read(random)
+	if _, err := io.ReadFull(r, random); err != nil {
+		panic(err) // fixed-size draw; only fails on exhausted/broken reader
+	}
 	body = append(body, random...)
 	body = appendU8Vec(body, nil)                                         // legacy_session_id: empty
 	body = appendU16Vec(body, []byte{0x13, 0x01, 0x13, 0x02, 0x13, 0x03}) // cipher_suites
@@ -168,6 +174,12 @@ func buildClientHello(sni string, scid []byte) []byte {
 
 	hs := []byte{0x01, byte(len(body) >> 16), byte(len(body) >> 8), byte(len(body))}
 	return append(hs, body...)
+}
+
+// buildClientHello is the production entry point: calls buildClientHelloWithRand
+// using crypto/rand.Reader, preserving the original signature and behavior.
+func buildClientHello(sni string, scid []byte) []byte {
+	return buildClientHelloWithRand(rand.Reader, sni, scid)
 }
 
 // buildCryptoFrame wraps data in a QUIC CRYPTO frame (type 0x06) at offset 0.
@@ -181,24 +193,32 @@ func buildCryptoFrame(data []byte) []byte {
 
 const qinitDatagramLen = 1200 // RFC 9000 §14.1 client-Initial minimum
 
-// buildQUICInitial returns a complete, header-protected QUIC v1 Initial datagram
+// buildQUICInitialWithRand returns a complete, header-protected QUIC v1 Initial datagram
 // of exactly datagramLen bytes carrying a ClientHello with sni. Connection IDs,
-// packet number, and the ClientHello randoms come from crypto/rand, so each call
-// differs (real-client behavior; no byte-identical signature). datagramLen is
-// fixed at 1200, which keeps the QUIC "Length" field a 2-byte varint.
+// packet number, and the ClientHello randoms come from r, so each call with a fresh
+// crypto/rand.Reader differs (real-client behavior; no byte-identical signature).
+// datagramLen is fixed at 1200, which keeps the QUIC "Length" field a 2-byte varint.
 // datagramLen must be >= the 47-byte header+tag overhead (always true for the fixed 1200).
-func buildQUICInitial(sni string, datagramLen int) []byte {
+// Random bytes are drawn from r in order: dcid(8), scid(8), pn(4), then key_share pub(32),
+// ClientHello random(32) via buildClientHelloWithRand — preserving the canonical draw order.
+func buildQUICInitialWithRand(r io.Reader, sni string, datagramLen int) []byte {
 	const pnLen = 4
 	dcid := make([]byte, 8)
 	scid := make([]byte, 8)
 	pn := make([]byte, pnLen)
-	rand.Read(dcid)
-	rand.Read(scid)
-	rand.Read(pn)
+	if _, err := io.ReadFull(r, dcid); err != nil {
+		panic(err) // fixed-size draw; only fails on exhausted/broken reader
+	}
+	if _, err := io.ReadFull(r, scid); err != nil {
+		panic(err)
+	}
+	if _, err := io.ReadFull(r, pn); err != nil {
+		panic(err)
+	}
 
 	key, iv, hp := deriveInitialKeys(dcid)
 	// ISCID transport param must equal this SCID (RFC 9000 §7.3) — pass it through.
-	crypto := buildCryptoFrame(buildClientHello(sni, scid))
+	crypto := buildCryptoFrame(buildClientHelloWithRand(r, sni, scid))
 
 	// header = byte0(1) + version(4) + dcidLen(1)+dcid + scidLen(1)+scid
 	//          + tokenLen(1) + lengthVarint(2) + pn(pnLen)
@@ -238,6 +258,12 @@ func buildQUICInitial(sni string, datagramLen int) []byte {
 		pkt[pnOffset+i] ^= mask[1+i]
 	}
 	return pkt
+}
+
+// buildQUICInitial is the production entry point: calls buildQUICInitialWithRand
+// using crypto/rand.Reader, preserving the original signature and behavior.
+func buildQUICInitial(sni string, datagramLen int) []byte {
+	return buildQUICInitialWithRand(rand.Reader, sni, datagramLen)
 }
 
 // qinitObf is the obf-registry adapter for Id (mechanism C): each I-packet is a
